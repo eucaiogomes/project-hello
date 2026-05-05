@@ -361,13 +361,15 @@ export default function EditStudio() {
         length: lenOf(s),
       }));
 
-      // Insertion logic: find overlap on the ANCHOR's target layer against non-group segs.
+      // Insertion (ripple) only when staying within the anchor's ORIGINAL layer.
+      // Cross-layer drags are free placement (Canva/CapCut style).
       const anchorItem = items.find((i) => i.id === anchorId)!;
+      const sameLayerAsOrigin = anchorItem.layer === anchor.layer;
       const others = segments.filter((s) => !groupIds.has(s.id) && s.layer === anchorItem.layer);
       const anchorEnd = anchorItem.start + anchorItem.length;
-      const overlapping = others.find(
-        (s) => anchorItem.start < endOf(s) - 1e-3 && anchorEnd > s.start + 1e-3,
-      );
+      const overlapping = sameLayerAsOrigin
+        ? others.find((s) => anchorItem.start < endOf(s) - 1e-3 && anchorEnd > s.start + 1e-3)
+        : undefined;
 
       if (!overlapping) {
         return {
