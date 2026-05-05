@@ -319,40 +319,70 @@ export default function EditStudio() {
     }));
   };
 
-  const moveSegment = (id: string, newStart: number, targetLayer: number) => {
-    setSegments((prev) => {
-      const seg = prev.find((s) => s.id === id);
-      if (!seg) return prev;
-      const groupIds = selectedIds.has(id) && selectedIds.size > 1 ? new Set(selectedIds) : new Set([id]);
-      const deltaStart = Math.max(0, newStart) - seg.start;
-      const deltaLayer = targetLayer - seg.layer;
-      const groupArr = Array.from(groupIds);
-      const minStart = Math.min(...groupArr.map((gid) => prev.find((s) => s.id === gid)?.start ?? 0));
-      const minLayer = Math.min(...groupArr.map((gid) => prev.find((s) => s.id === gid)?.layer ?? 0));
-      const dStart = Math.max(deltaStart, -minStart);
-      const dLayer = Math.max(deltaLayer, -minLayer);
-      const moved = prev.map((s) =>
-        groupIds.has(s.id) ? { ...s, start: s.start + dStart, layer: s.layer + dLayer } : s,
-      );
-      const resolved = [...moved];
-      for (const gid of groupArr) {
-        const idx = resolved.findIndex((s) => s.id === gid);
-        if (idx < 0) continue;
-        const s = resolved[idx];
-        let L = s.layer;
-        const conflict = (lay: number) =>
-          resolved.some(
-            (o) =>
-              !groupIds.has(o.id) &&
-              o.layer === lay &&
-              overlaps({ start: s.start, end: endOf(s) }, { start: o.start, end: endOf(o) }),
-          );
-        while (conflict(L)) L++;
-        resolved[idx] = { ...s, layer: L };
+  // ===== Drag preview / insertion indicator (Canva/CapCut style) =====
+  type DragPreview = {
+    id: string;
+    layer: number;
+    start: number;
+    length: number;
+    /** When set, drop will insert at this time and ripple-shift later clips on the layer. */
+    insertAt: number | null;
+  };
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+
+  /** Compute snap-aware preview from a proposed (start, layer) for a given segment. */
+  const computeDragPreview = useCallback(
+    (id: string, proposedStart: number, proposedLayer: number): DragPreview | null => {
+      const seg = segments.find((s) => s.id === id);
+      if (!seg) return null;
+      const len = lenOf(seg);
+      const start = Math.max(0, proposedStart);
+      const layer = Math.max(0, proposedLayer);
+      const layerSegs = segments.filter((s) => s.layer === layer && s.id !== id);
+      const end = start + len;
+      // Find any segment we'd overlap on this layer
+      const overlapping = layerSegs.find((s) => start < endOf(s) - 1e-3 && end > s.start + 1e-3);
+      if (!overlapping) {
+        return { id, layer, start, length: len, insertAt: null };
       }
-      return resolved;
+      // Decide insert-before vs insert-after based on dragged center vs overlapped center
+      const draggedCenter = start + len / 2;
+      const segCenter = overlapping.start + lenOf(overlapping) / 2;
+      const insertAt = draggedCenter < segCenter ? overlapping.start : endOf(overlapping);
+      return { id, layer, start, length: len, insertAt };
+    },
+    [segments],
+  );
+
+  const updateDragPreview = (id: string, proposedStart: number, proposedLayer: number) => {
+    setDragPreview(computeDragPreview(id, proposedStart, proposedLayer));
+  };
+
+  const commitDrag = () => {
+    const dp = dragPreview;
+    setDragPreview(null);
+    if (!dp) return;
+    setSegments((prev) => {
+      const seg = prev.find((s) => s.id === dp.id);
+      if (!seg) return prev;
+      // Free placement (no overlap)
+      if (dp.insertAt === null) {
+        return prev.map((s) => (s.id === dp.id ? { ...s, start: dp.start, layer: dp.layer } : s));
+      }
+      // Ripple insert: shift later clips on target layer by the dragged length
+      const insertAt = dp.insertAt;
+      const len = dp.length;
+      return prev.map((s) => {
+        if (s.id === dp.id) return { ...s, start: insertAt, layer: dp.layer };
+        if (s.layer === dp.layer && s.start >= insertAt - 1e-3) {
+          return { ...s, start: s.start + len };
+        }
+        return s;
+      });
     });
   };
+
+  const cancelDrag = () => setDragPreview(null);
 
   const onUploadMedia = async (files: FileList | null) => {
     if (!files) return;
@@ -656,7 +686,10 @@ export default function EditStudio() {
               selectedIds={selectedIds}
               toggleSelect={toggleSelect}
               trim={trim}
-              moveSegment={moveSegment}
+              dragPreview={dragPreview?.layer === layerIdx ? dragPreview : null}
+              onDragUpdate={updateDragPreview}
+              onDragCommit={commitDrag}
+              onDragCancel={cancelDrag}
             />
           ))}
 
@@ -900,7 +933,7 @@ const KIND_STYLE: Record<Kind, { color: string; Icon: any }> = {
   image: { color: "bg-amber-500/30 ring-amber-500/60", Icon: Film },
 };
 
-function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, moveSegment }: {
+function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, dragPreview, onDragUpdate, onDragCommit, onDragCancel }: {
   layerIdx: number;
   segs: Segment[];
   pxPerSec: number;
@@ -908,7 +941,10 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
   selectedIds: Set<string>;
   toggleSelect: (id: string, additive: boolean) => void;
   trim: (id: string, edge: "start" | "end", deltaSec: number) => void;
-  moveSegment: (id: string, newStart: number, targetLayer: number) => void;
+  dragPreview: { id: string; layer: number; start: number; length: number; insertAt: number | null } | null;
+  onDragUpdate: (id: string, proposedStart: number, proposedLayer: number) => void;
+  onDragCommit: () => void;
+  onDragCancel: () => void;
 }) {
   return (
     <div className="flex items-stretch">
@@ -920,6 +956,7 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
         style={{ width: totalPx }}
       >
         {segs.map((s) => {
+          const isDragging = dragPreview?.id === s.id;
           const left = s.start * pxPerSec;
           const width = (s.srcEnd - s.srcStart) * pxPerSec;
           const selected = selectedIds.has(s.id);
@@ -930,10 +967,9 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
               data-segment
               onMouseDown={(e) => {
                 if ((e.target as HTMLElement).dataset.handle) return;
-                e.stopPropagation(); // prevent rubber-band
+                e.stopPropagation();
                 const additive = e.shiftKey || e.metaKey || e.ctrlKey;
                 if (additive || !selected) toggleSelect(s.id, additive);
-                // Begin smooth drag
                 const startX = e.clientX;
                 const startY = e.clientY;
                 const startStart = s.start;
@@ -947,16 +983,17 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
                   const newStart = Math.max(0, startStart + dx / pxPerSec);
                   const layerDelta = Math.round(dy / 44);
                   const newLayer = Math.max(0, startLayer + layerDelta);
-                  moveSegment(s.id, newStart, newLayer);
+                  onDragUpdate(s.id, newStart, newLayer);
                 };
                 const up = () => {
                   window.removeEventListener("mousemove", move);
                   window.removeEventListener("mouseup", up);
+                  if (moved) onDragCommit(); else onDragCancel();
                 };
                 window.addEventListener("mousemove", move);
                 window.addEventListener("mouseup", up);
               }}
-              className={`group absolute inset-y-0.5 cursor-grab overflow-hidden rounded ring-1 transition-all duration-100 ${style.color} ${selected ? "outline outline-2 outline-[hsl(var(--rec))] scale-[1.02] z-10" : "hover:brightness-110"}`}
+              className={`group absolute inset-y-0.5 cursor-grab overflow-hidden rounded ring-1 transition-all duration-100 ${style.color} ${selected ? "outline outline-2 outline-[hsl(var(--rec))] z-10" : "hover:brightness-110"} ${isDragging ? "opacity-40" : ""}`}
               style={{ left, width }}
             >
               <div className="flex h-full items-center gap-1 px-1.5 text-[10px] text-foreground/90">
@@ -973,6 +1010,26 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
             </div>
           );
         })}
+
+        {/* Ghost preview of dragged clip */}
+        {dragPreview && dragPreview.insertAt === null && (
+          <div
+            className="pointer-events-none absolute inset-y-0.5 rounded ring-2 ring-dashed ring-primary/80 bg-primary/10 z-20"
+            style={{ left: dragPreview.start * pxPerSec, width: dragPreview.length * pxPerSec }}
+          />
+        )}
+
+        {/* Insertion indicator (dotted line at clip edge, Canva/CapCut style) */}
+        {dragPreview && dragPreview.insertAt !== null && (
+          <div
+            className="pointer-events-none absolute inset-y-0 z-30 flex items-center"
+            style={{ left: dragPreview.insertAt * pxPerSec - 1 }}
+          >
+            <div className="h-full w-0.5 bg-primary animate-pulse" style={{ boxShadow: "0 0 8px hsl(var(--primary))" }} />
+            <div className="absolute -top-1 -left-1 h-2 w-2 rounded-full bg-primary" />
+            <div className="absolute -bottom-1 -left-1 h-2 w-2 rounded-full bg-primary" />
+          </div>
+        )}
       </div>
     </div>
   );
