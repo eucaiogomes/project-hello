@@ -686,7 +686,10 @@ export default function EditStudio() {
               selectedIds={selectedIds}
               toggleSelect={toggleSelect}
               trim={trim}
-              moveSegment={moveSegment}
+              dragPreview={dragPreview?.layer === layerIdx ? dragPreview : null}
+              onDragUpdate={updateDragPreview}
+              onDragCommit={commitDrag}
+              onDragCancel={cancelDrag}
             />
           ))}
 
