@@ -990,7 +990,7 @@ const KIND_STYLE: Record<Kind, { color: string; Icon: any }> = {
   image: { color: "bg-amber-500/30 ring-amber-500/60", Icon: Film },
 };
 
-function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, dragPreview, onDragUpdate, onDragCommit, onDragCancel }: {
+function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, dragPreviewItems, dragInsertAt, draggingIds, onDragUpdate, onDragCommit, onDragCancel }: {
   layerIdx: number;
   segs: Segment[];
   pxPerSec: number;
@@ -998,7 +998,9 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
   selectedIds: Set<string>;
   toggleSelect: (id: string, additive: boolean) => void;
   trim: (id: string, edge: "start" | "end", deltaSec: number) => void;
-  dragPreview: { id: string; layer: number; start: number; length: number; insertAt: number | null } | null;
+  dragPreviewItems: { id: string; layer: number; start: number; length: number }[];
+  dragInsertAt: number | null;
+  draggingIds: Set<string> | null;
   onDragUpdate: (id: string, proposedStart: number, proposedLayer: number) => void;
   onDragCommit: () => void;
   onDragCancel: () => void;
