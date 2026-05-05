@@ -1070,19 +1070,20 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
           );
         })}
 
-        {/* Ghost preview of dragged clip */}
-        {dragPreview && dragPreview.insertAt === null && (
+        {/* Ghost previews of dragged clips on this layer */}
+        {dragInsertAt === null && dragPreviewItems.map((it) => (
           <div
+            key={`ghost-${it.id}`}
             className="pointer-events-none absolute inset-y-0.5 rounded ring-2 ring-dashed ring-primary/80 bg-primary/10 z-20"
-            style={{ left: dragPreview.start * pxPerSec, width: dragPreview.length * pxPerSec }}
+            style={{ left: it.start * pxPerSec, width: it.length * pxPerSec }}
           />
-        )}
+        ))}
 
         {/* Insertion indicator (dotted line at clip edge, Canva/CapCut style) */}
-        {dragPreview && dragPreview.insertAt !== null && (
+        {dragInsertAt !== null && (
           <div
             className="pointer-events-none absolute inset-y-0 z-30 flex items-center"
-            style={{ left: dragPreview.insertAt * pxPerSec - 1 }}
+            style={{ left: dragInsertAt * pxPerSec - 1 }}
           >
             <div className="h-full w-0.5 bg-primary animate-pulse" style={{ boxShadow: "0 0 8px hsl(var(--primary))" }} />
             <div className="absolute -top-1 -left-1 h-2 w-2 rounded-full bg-primary" />
