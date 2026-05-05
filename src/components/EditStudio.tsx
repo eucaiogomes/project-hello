@@ -319,40 +319,70 @@ export default function EditStudio() {
     }));
   };
 
-  const moveSegment = (id: string, newStart: number, targetLayer: number) => {
-    setSegments((prev) => {
-      const seg = prev.find((s) => s.id === id);
-      if (!seg) return prev;
-      const groupIds = selectedIds.has(id) && selectedIds.size > 1 ? new Set(selectedIds) : new Set([id]);
-      const deltaStart = Math.max(0, newStart) - seg.start;
-      const deltaLayer = targetLayer - seg.layer;
-      const groupArr = Array.from(groupIds);
-      const minStart = Math.min(...groupArr.map((gid) => prev.find((s) => s.id === gid)?.start ?? 0));
-      const minLayer = Math.min(...groupArr.map((gid) => prev.find((s) => s.id === gid)?.layer ?? 0));
-      const dStart = Math.max(deltaStart, -minStart);
-      const dLayer = Math.max(deltaLayer, -minLayer);
-      const moved = prev.map((s) =>
-        groupIds.has(s.id) ? { ...s, start: s.start + dStart, layer: s.layer + dLayer } : s,
-      );
-      const resolved = [...moved];
-      for (const gid of groupArr) {
-        const idx = resolved.findIndex((s) => s.id === gid);
-        if (idx < 0) continue;
-        const s = resolved[idx];
-        let L = s.layer;
-        const conflict = (lay: number) =>
-          resolved.some(
-            (o) =>
-              !groupIds.has(o.id) &&
-              o.layer === lay &&
-              overlaps({ start: s.start, end: endOf(s) }, { start: o.start, end: endOf(o) }),
-          );
-        while (conflict(L)) L++;
-        resolved[idx] = { ...s, layer: L };
+  // ===== Drag preview / insertion indicator (Canva/CapCut style) =====
+  type DragPreview = {
+    id: string;
+    layer: number;
+    start: number;
+    length: number;
+    /** When set, drop will insert at this time and ripple-shift later clips on the layer. */
+    insertAt: number | null;
+  };
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+
+  /** Compute snap-aware preview from a proposed (start, layer) for a given segment. */
+  const computeDragPreview = useCallback(
+    (id: string, proposedStart: number, proposedLayer: number): DragPreview | null => {
+      const seg = segments.find((s) => s.id === id);
+      if (!seg) return null;
+      const len = lenOf(seg);
+      const start = Math.max(0, proposedStart);
+      const layer = Math.max(0, proposedLayer);
+      const layerSegs = segments.filter((s) => s.layer === layer && s.id !== id);
+      const end = start + len;
+      // Find any segment we'd overlap on this layer
+      const overlapping = layerSegs.find((s) => start < endOf(s) - 1e-3 && end > s.start + 1e-3);
+      if (!overlapping) {
+        return { id, layer, start, length: len, insertAt: null };
       }
-      return resolved;
+      // Decide insert-before vs insert-after based on dragged center vs overlapped center
+      const draggedCenter = start + len / 2;
+      const segCenter = overlapping.start + lenOf(overlapping) / 2;
+      const insertAt = draggedCenter < segCenter ? overlapping.start : endOf(overlapping);
+      return { id, layer, start, length: len, insertAt };
+    },
+    [segments],
+  );
+
+  const updateDragPreview = (id: string, proposedStart: number, proposedLayer: number) => {
+    setDragPreview(computeDragPreview(id, proposedStart, proposedLayer));
+  };
+
+  const commitDrag = () => {
+    const dp = dragPreview;
+    setDragPreview(null);
+    if (!dp) return;
+    setSegments((prev) => {
+      const seg = prev.find((s) => s.id === dp.id);
+      if (!seg) return prev;
+      // Free placement (no overlap)
+      if (dp.insertAt === null) {
+        return prev.map((s) => (s.id === dp.id ? { ...s, start: dp.start, layer: dp.layer } : s));
+      }
+      // Ripple insert: shift later clips on target layer by the dragged length
+      const insertAt = dp.insertAt;
+      const len = dp.length;
+      return prev.map((s) => {
+        if (s.id === dp.id) return { ...s, start: insertAt, layer: dp.layer };
+        if (s.layer === dp.layer && s.start >= insertAt - 1e-3) {
+          return { ...s, start: s.start + len };
+        }
+        return s;
+      });
     });
   };
+
+  const cancelDrag = () => setDragPreview(null);
 
   const onUploadMedia = async (files: FileList | null) => {
     if (!files) return;
