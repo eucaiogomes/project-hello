@@ -741,7 +741,9 @@ export default function EditStudio() {
               selectedIds={selectedIds}
               toggleSelect={toggleSelect}
               trim={trim}
-              dragPreview={dragPreview?.layer === layerIdx ? dragPreview : null}
+              dragPreviewItems={dragPreview ? dragPreview.items.filter((i) => i.layer === layerIdx) : []}
+              dragInsertAt={dragPreview && dragPreview.insertLayer === layerIdx ? dragPreview.insertAt : null}
+              draggingIds={dragPreview ? new Set(dragPreview.items.map((i) => i.id)) : null}
               onDragUpdate={updateDragPreview}
               onDragCommit={commitDrag}
               onDragCancel={cancelDrag}
