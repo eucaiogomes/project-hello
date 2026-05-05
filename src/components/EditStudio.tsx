@@ -320,38 +320,79 @@ export default function EditStudio() {
   };
 
   // ===== Drag preview / insertion indicator (Canva/CapCut style) =====
+  type DragItem = { id: string; layer: number; start: number; length: number };
   type DragPreview = {
-    id: string;
-    layer: number;
-    start: number;
-    length: number;
-    /** When set, drop will insert at this time and ripple-shift later clips on the layer. */
+    anchorId: string;
+    items: DragItem[];
+    /** Per-layer ripple insertion point (only for the anchor's layer). */
     insertAt: number | null;
+    insertLayer: number;
+    /** Length used to ripple-shift later clips on insertLayer. */
+    rippleLength: number;
   };
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
 
-  /** Compute snap-aware preview from a proposed (start, layer) for a given segment. */
+  /** Compute snap-aware preview from a proposed (start, layer) for a given anchor segment.
+   *  When the anchor is part of a multi-selection, all selected items move with the same
+   *  start/layer deltas, preserving relative positioning. */
   const computeDragPreview = useCallback(
-    (id: string, proposedStart: number, proposedLayer: number): DragPreview | null => {
-      const seg = segments.find((s) => s.id === id);
-      if (!seg) return null;
-      const len = lenOf(seg);
-      const start = Math.max(0, proposedStart);
-      const layer = Math.max(0, proposedLayer);
-      const layerSegs = segments.filter((s) => s.layer === layer && s.id !== id);
-      const end = start + len;
-      // Find any segment we'd overlap on this layer
-      const overlapping = layerSegs.find((s) => start < endOf(s) - 1e-3 && end > s.start + 1e-3);
+    (anchorId: string, proposedStart: number, proposedLayer: number): DragPreview | null => {
+      const anchor = segments.find((s) => s.id === anchorId);
+      if (!anchor) return null;
+
+      const groupIds =
+        selectedIds.has(anchorId) && selectedIds.size > 1
+          ? new Set(selectedIds)
+          : new Set([anchorId]);
+      const group = segments.filter((s) => groupIds.has(s.id));
+
+      // Clamp deltas so no item goes below 0 (start or layer).
+      const desiredDStart = Math.max(0, proposedStart) - anchor.start;
+      const desiredDLayer = Math.max(0, proposedLayer) - anchor.layer;
+      const minStart = Math.min(...group.map((s) => s.start));
+      const minLayer = Math.min(...group.map((s) => s.layer));
+      const dStart = Math.max(desiredDStart, -minStart);
+      const dLayer = Math.max(desiredDLayer, -minLayer);
+
+      const items: DragItem[] = group.map((s) => ({
+        id: s.id,
+        layer: s.layer + dLayer,
+        start: s.start + dStart,
+        length: lenOf(s),
+      }));
+
+      // Insertion logic: find overlap on the ANCHOR's target layer against non-group segs.
+      const anchorItem = items.find((i) => i.id === anchorId)!;
+      const others = segments.filter((s) => !groupIds.has(s.id) && s.layer === anchorItem.layer);
+      const anchorEnd = anchorItem.start + anchorItem.length;
+      const overlapping = others.find(
+        (s) => anchorItem.start < endOf(s) - 1e-3 && anchorEnd > s.start + 1e-3,
+      );
+
       if (!overlapping) {
-        return { id, layer, start, length: len, insertAt: null };
+        return {
+          anchorId,
+          items,
+          insertAt: null,
+          insertLayer: anchorItem.layer,
+          rippleLength: anchorItem.length,
+        };
       }
-      // Decide insert-before vs insert-after based on dragged center vs overlapped center
-      const draggedCenter = start + len / 2;
+      const draggedCenter = anchorItem.start + anchorItem.length / 2;
       const segCenter = overlapping.start + lenOf(overlapping) / 2;
       const insertAt = draggedCenter < segCenter ? overlapping.start : endOf(overlapping);
-      return { id, layer, start, length: len, insertAt };
+      const groupOnLayer = items.filter((i) => i.layer === anchorItem.layer);
+      const lo = Math.min(...groupOnLayer.map((i) => i.start));
+      const hi = Math.max(...groupOnLayer.map((i) => i.start + i.length));
+      return {
+        anchorId,
+        items,
+        insertAt,
+        insertLayer: anchorItem.layer,
+        rippleLength: hi - lo,
+      };
     },
-    [segments],
+    [segments, selectedIds],
   );
 
   const updateDragPreview = (id: string, proposedStart: number, proposedLayer: number) => {
@@ -363,19 +404,33 @@ export default function EditStudio() {
     setDragPreview(null);
     if (!dp) return;
     setSegments((prev) => {
-      const seg = prev.find((s) => s.id === dp.id);
-      if (!seg) return prev;
-      // Free placement (no overlap)
+      const itemsById = new Map(dp.items.map((i) => [i.id, i]));
+      const groupIds = new Set(dp.items.map((i) => i.id));
+
       if (dp.insertAt === null) {
-        return prev.map((s) => (s.id === dp.id ? { ...s, start: dp.start, layer: dp.layer } : s));
+        return prev.map((s) => {
+          const it = itemsById.get(s.id);
+          return it ? { ...s, start: it.start, layer: it.layer } : s;
+        });
       }
-      // Ripple insert: shift later clips on target layer by the dragged length
+
       const insertAt = dp.insertAt;
-      const len = dp.length;
+      const insertLayer = dp.insertLayer;
+      const rippleLength = dp.rippleLength;
+      const groupOnInsertLayer = dp.items.filter((i) => i.layer === insertLayer);
+      const groupLo = Math.min(...groupOnInsertLayer.map((i) => i.start));
+      const shiftToInsert = insertAt - groupLo;
+
       return prev.map((s) => {
-        if (s.id === dp.id) return { ...s, start: insertAt, layer: dp.layer };
-        if (s.layer === dp.layer && s.start >= insertAt - 1e-3) {
-          return { ...s, start: s.start + len };
+        const it = itemsById.get(s.id);
+        if (it) {
+          if (it.layer === insertLayer) {
+            return { ...s, start: it.start + shiftToInsert, layer: it.layer };
+          }
+          return { ...s, start: it.start, layer: it.layer };
+        }
+        if (!groupIds.has(s.id) && s.layer === insertLayer && s.start >= insertAt - 1e-3) {
+          return { ...s, start: s.start + rippleLength };
         }
         return s;
       });
