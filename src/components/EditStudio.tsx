@@ -933,7 +933,7 @@ const KIND_STYLE: Record<Kind, { color: string; Icon: any }> = {
   image: { color: "bg-amber-500/30 ring-amber-500/60", Icon: Film },
 };
 
-function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, moveSegment }: {
+function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect, trim, dragPreview, onDragUpdate, onDragCommit, onDragCancel }: {
   layerIdx: number;
   segs: Segment[];
   pxPerSec: number;
@@ -941,7 +941,10 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
   selectedIds: Set<string>;
   toggleSelect: (id: string, additive: boolean) => void;
   trim: (id: string, edge: "start" | "end", deltaSec: number) => void;
-  moveSegment: (id: string, newStart: number, targetLayer: number) => void;
+  dragPreview: { id: string; layer: number; start: number; length: number; insertAt: number | null } | null;
+  onDragUpdate: (id: string, proposedStart: number, proposedLayer: number) => void;
+  onDragCommit: () => void;
+  onDragCancel: () => void;
 }) {
   return (
     <div className="flex items-stretch">
@@ -953,6 +956,7 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
         style={{ width: totalPx }}
       >
         {segs.map((s) => {
+          const isDragging = dragPreview?.id === s.id;
           const left = s.start * pxPerSec;
           const width = (s.srcEnd - s.srcStart) * pxPerSec;
           const selected = selectedIds.has(s.id);
@@ -963,10 +967,9 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
               data-segment
               onMouseDown={(e) => {
                 if ((e.target as HTMLElement).dataset.handle) return;
-                e.stopPropagation(); // prevent rubber-band
+                e.stopPropagation();
                 const additive = e.shiftKey || e.metaKey || e.ctrlKey;
                 if (additive || !selected) toggleSelect(s.id, additive);
-                // Begin smooth drag
                 const startX = e.clientX;
                 const startY = e.clientY;
                 const startStart = s.start;
@@ -980,16 +983,17 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
                   const newStart = Math.max(0, startStart + dx / pxPerSec);
                   const layerDelta = Math.round(dy / 44);
                   const newLayer = Math.max(0, startLayer + layerDelta);
-                  moveSegment(s.id, newStart, newLayer);
+                  onDragUpdate(s.id, newStart, newLayer);
                 };
                 const up = () => {
                   window.removeEventListener("mousemove", move);
                   window.removeEventListener("mouseup", up);
+                  if (moved) onDragCommit(); else onDragCancel();
                 };
                 window.addEventListener("mousemove", move);
                 window.addEventListener("mouseup", up);
               }}
-              className={`group absolute inset-y-0.5 cursor-grab overflow-hidden rounded ring-1 transition-all duration-100 ${style.color} ${selected ? "outline outline-2 outline-[hsl(var(--rec))] scale-[1.02] z-10" : "hover:brightness-110"}`}
+              className={`group absolute inset-y-0.5 cursor-grab overflow-hidden rounded ring-1 transition-all duration-100 ${style.color} ${selected ? "outline outline-2 outline-[hsl(var(--rec))] z-10" : "hover:brightness-110"} ${isDragging ? "opacity-40" : ""}`}
               style={{ left, width }}
             >
               <div className="flex h-full items-center gap-1 px-1.5 text-[10px] text-foreground/90">
@@ -1006,6 +1010,26 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
             </div>
           );
         })}
+
+        {/* Ghost preview of dragged clip */}
+        {dragPreview && dragPreview.insertAt === null && (
+          <div
+            className="pointer-events-none absolute inset-y-0.5 rounded ring-2 ring-dashed ring-primary/80 bg-primary/10 z-20"
+            style={{ left: dragPreview.start * pxPerSec, width: dragPreview.length * pxPerSec }}
+          />
+        )}
+
+        {/* Insertion indicator (dotted line at clip edge, Canva/CapCut style) */}
+        {dragPreview && dragPreview.insertAt !== null && (
+          <div
+            className="pointer-events-none absolute inset-y-0 z-30 flex items-center"
+            style={{ left: dragPreview.insertAt * pxPerSec - 1 }}
+          >
+            <div className="h-full w-0.5 bg-primary animate-pulse" style={{ boxShadow: "0 0 8px hsl(var(--primary))" }} />
+            <div className="absolute -top-1 -left-1 h-2 w-2 rounded-full bg-primary" />
+            <div className="absolute -bottom-1 -left-1 h-2 w-2 rounded-full bg-primary" />
+          </div>
+        )}
       </div>
     </div>
   );
