@@ -1015,7 +1015,7 @@ function LayerRow({ layerIdx, segs, pxPerSec, totalPx, selectedIds, toggleSelect
         style={{ width: totalPx }}
       >
         {segs.map((s) => {
-          const isDragging = dragPreview?.id === s.id;
+          const isDragging = !!draggingIds?.has(s.id);
           const left = s.start * pxPerSec;
           const width = (s.srcEnd - s.srcStart) * pxPerSec;
           const selected = selectedIds.has(s.id);
